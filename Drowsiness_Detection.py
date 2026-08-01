@@ -153,6 +153,8 @@ def parse_args():
                         "pause (mirror and shoulder checks)")
     p.add_argument("--headless", action="store_true",
                    help="run without a video window (Ctrl+C to stop)")
+    p.add_argument("--debug", action="store_true",
+                   help="log presence-detection internals while the face is lost")
     p.add_argument("--no-sound", action="store_true", help="disable the audio alarm")
     p.add_argument("--model", default="models/shape_predictor_68_face_landmarks.dat",
                    help="path to the dlib 68-landmark model")
@@ -369,17 +371,26 @@ def main():
                 sh, sw = small.shape
                 roi = small[sh // 3:, sw // 6:5 * sw // 6]
 
-                present = False
-                if seat_snapshot is not None and seat_snapshot.shape == roi.shape:
-                    changed = (cv2.absdiff(roi, seat_snapshot) > 25).mean()
-                    present = changed < 0.4
-                if not present and roi_history:
+                # normalized correlation is robust to dim lighting, where raw
+                # pixel differences between "occupied" and "empty" are small
+                sim = None
+                if (seat_snapshot is not None and seat_snapshot.shape == roi.shape
+                        and roi.std() > 5):
+                    sim = float(cv2.matchTemplate(roi, seat_snapshot,
+                                                  cv2.TM_CCOEFF_NORMED)[0, 0])
+                moved = False
+                if roi_history:
                     old = roi_history[0][1]
                     if old.shape == roi.shape:
-                        present = (cv2.absdiff(roi, old) > 20).mean() > 0.01
+                        moved = (cv2.absdiff(roi, old) > 20).mean() > 0.01
+                present = (sim is not None and sim > 0.55) or moved
                 if not present and not body_cascade.empty():
                     present = len(body_cascade.detectMultiScale(
                         small, 1.1, 3, minSize=(60, 60))) > 0
+                if args.debug and frame_idx % 30 == 0:
+                    sim_txt = "-" if sim is None else f"{sim:.2f}"
+                    print(f"[debug] seat-sim={sim_txt} moved={moved} "
+                          f"present={present}")
 
                 roi_history.append((now, roi))
                 while roi_history and now - roi_history[0][0] > 3.0:
