@@ -77,8 +77,10 @@ on private networks. The audio alarm still plays from the PC.
 - **Calibration** makes the pitch baseline relative to the camera's mounting
   angle, so a dashboard camera looking up at the driver works the same as a
   laptop webcam.
-- **Look-away tolerance**: mirror and shoulder checks (large head yaw) pause
-  the eye/mouth measurements instead of accumulating toward a false alarm.
+- **Look-away tolerance with a distraction limit**: mirror and shoulder
+  checks (large head yaw) pause the eye/mouth measurements instead of
+  accumulating toward a false alarm — but a *sustained* look-away is
+  distraction: warning at 3 s, "EYES OFF ROAD" alarm at 6 s.
 - **Headless mode** runs without any display, ready for a small in-car
   computer that boots straight into detection.
 - **Driver absence vs. slumped driver**: losing the face briefly escalates

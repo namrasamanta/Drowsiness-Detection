@@ -226,6 +226,10 @@ def parse_args():
     p.add_argument("--yaw-limit", type=float, default=25.0,
                    help="head turn in degrees beyond which eye/mouth checks "
                         "pause (mirror and shoulder checks)")
+    p.add_argument("--distraction-secs", type=float, default=3.0,
+                   help="sustained look-away seconds before a distraction warning")
+    p.add_argument("--distraction-alarm-secs", type=float, default=6.0,
+                   help="sustained look-away seconds before the alarm sounds")
     p.add_argument("--headless", action="store_true",
                    help="run without a video window (Ctrl+C to stop)")
     p.add_argument("--debug", action="store_true",
@@ -267,6 +271,7 @@ def main():
     closed_since = None
     yawn_since = None
     nod_since = None
+    away_since = None
     yawn_open = False
     perclos = 0.0
     perclos_active = False
@@ -386,9 +391,18 @@ def main():
                           f"eye-closed threshold {ear_thresh:.2f}")
             elif looking_away:
                 # eye/mouth landmarks are unreliable at an angle; a mirror or
-                # shoulder check must not accumulate toward any alert
+                # shoulder check must not accumulate toward any alert - but a
+                # SUSTAINED look-away is distraction and escalates on its own
                 closed_since = yawn_since = nod_since = None
+                away_since = away_since or now
+                away_for = now - away_since
+                if away_for >= args.distraction_alarm_secs:
+                    alerts.append(("distracted-alarm", "EYES OFF ROAD - LOOK AHEAD"))
+                elif away_for >= args.distraction_secs:
+                    warnings.append(("distracted", "LOOKING AWAY TOO LONG"))
             else:
+                away_since = None
+
                 # 1. microsleep: sustained eye closure
                 eyes_closed = ear < ear_thresh
                 if eyes_closed:
@@ -437,7 +451,7 @@ def main():
                 cv2.putText(frame, text, (10, frame.shape[0] - 10 - 18 * i),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
         else:
-            closed_since = yawn_since = nod_since = None
+            closed_since = yawn_since = nod_since = away_since = None
             # face gone - decide whether someone is still in the seat, so a
             # slumped driver (head down, torso present) is never mistaken
             # for an empty seat. Three independent checks, any one counts:
