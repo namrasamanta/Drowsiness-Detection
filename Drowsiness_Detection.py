@@ -203,7 +203,8 @@ def main():
     face_rect = None
     frame_idx = 0
     last_body_time = None
-    prev_seat_roi = None
+    seat_snapshot = None      # seat region as it looked with the driver present
+    roi_history = deque()     # recent seat regions, for slow-motion detection
 
     if args.headless:
         print("Drowsiness detection running headless - press Ctrl+C to stop.")
@@ -250,7 +251,16 @@ def main():
 
         if face_rect is not None:
             last_face_time = now
-            prev_seat_roi = None
+            roi_history.clear()
+            if frame_idx % 5 == 0:
+                # remember what the occupied seat looks like, so that when
+                # the face disappears we can tell "slumped driver, torso
+                # still filling the seat" from "driver got out"
+                scale = args.detect_width / gray.shape[1]
+                small = cv2.resize(gray, (args.detect_width,
+                                          int(gray.shape[0] * scale)))
+                sh, sw = small.shape
+                seat_snapshot = small[sh // 3:, sw // 6:5 * sw // 6]
             shape = face_utils.shape_to_np(predictor(gray, face_rect))
 
             left_eye = shape[l_start:l_end]
@@ -345,27 +355,36 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
         else:
             closed_since = yawn_since = nod_since = None
-            # face gone - check whether someone is still in the seat, so a
+            # face gone - decide whether someone is still in the seat, so a
             # slumped driver (head down, torso present) is never mistaken
-            # for an empty seat. Two independent checks: the upper-body
-            # cascade (weak for seated close-ups) and motion in the seat
-            # region - even a still person breathes and sways, while an
-            # empty seat is static. Every 3rd frame is plenty.
+            # for an empty seat. Three independent checks, any one counts:
+            #   1. seat similarity: the seat still looks like it did with
+            #      the driver in it (works even for a motionless person)
+            #   2. slow motion: breathing/swaying vs ~3 s ago
+            #   3. upper-body cascade (weak for seated close-ups, but free)
             if frame_idx % 3 == 0:
                 scale = args.detect_width / gray.shape[1]
                 small = cv2.resize(gray, (args.detect_width,
                                           int(gray.shape[0] * scale)))
-                found_body = (not body_cascade.empty() and
-                              len(body_cascade.detectMultiScale(
-                                  small, 1.1, 3, minSize=(60, 60))) > 0)
                 sh, sw = small.shape
                 roi = small[sh // 3:, sw // 6:5 * sw // 6]
-                motion = False
-                if prev_seat_roi is not None and prev_seat_roi.shape == roi.shape:
-                    diff = cv2.absdiff(roi, prev_seat_roi)
-                    motion = (diff > 20).mean() > 0.015
-                prev_seat_roi = roi
-                if found_body or motion:
+
+                present = False
+                if seat_snapshot is not None and seat_snapshot.shape == roi.shape:
+                    changed = (cv2.absdiff(roi, seat_snapshot) > 25).mean()
+                    present = changed < 0.4
+                if not present and roi_history:
+                    old = roi_history[0][1]
+                    if old.shape == roi.shape:
+                        present = (cv2.absdiff(roi, old) > 20).mean() > 0.01
+                if not present and not body_cascade.empty():
+                    present = len(body_cascade.detectMultiScale(
+                        small, 1.1, 3, minSize=(60, 60))) > 0
+
+                roi_history.append((now, roi))
+                while roi_history and now - roi_history[0][0] > 3.0:
+                    roi_history.popleft()
+                if present:
                     last_body_time = now
             body_present = (last_body_time is not None
                             and now - last_body_time < 5.0)
@@ -379,6 +398,8 @@ def main():
                 if lost_for > args.absent_secs and not body_present:
                     last_face_time = None
                     last_body_time = None
+                    seat_snapshot = None
+                    roi_history.clear()
                     eye_history.clear()
                     yawn_times.clear()
                     perclos = 0.0
