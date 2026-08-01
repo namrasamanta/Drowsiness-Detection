@@ -77,6 +77,10 @@ On very weak hardware you can push further:
 The bottom-left HUD shows live FPS. Alert thresholds are measured in
 seconds, not frames, so behavior stays consistent at any frame rate.
 
+## Architecture
+
+![Architecture](assets/architecture.svg)
+
 ## How it works
 
 Each eye is described by 6 landmark points; the EAR is the ratio of the

@@ -259,21 +259,29 @@ def main():
             looking_away = yaw is not None and abs(yaw) > args.yaw_limit
 
             if not calibrated:
-                # learn this driver's normal pose and eye openness first,
-                # so camera angle and eye shape don't skew the thresholds
+                # learn this driver's normal pose and eye openness first, so
+                # camera angle and eye shape don't skew the thresholds; only
+                # facing-forward frames count, and the window extends until
+                # enough of them are seen - a head-down or turned-away start
+                # must not poison the baseline
                 calib_end = calib_end or now + args.calibrate_secs
-                ear_samples.append(ear)
-                if pitch is not None:
-                    pitch_samples.append(pitch)
+                if not looking_away:
+                    ear_samples.append(ear)
+                    if pitch is not None and abs(pitch) < 35:
+                        pitch_samples.append(pitch)
                 cv2.putText(frame, "CALIBRATING - look ahead normally", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2)
-                if now >= calib_end:
+                if now >= calib_end and len(ear_samples) >= 30:
                     calibrated = True
+                    ear_samples.sort()
+                    pitch_samples.sort()
                     if pitch_samples:
-                        baseline_pitch = sorted(pitch_samples)[len(pitch_samples) // 2]
-                    if ear_samples:
-                        open_ear = sorted(ear_samples)[len(ear_samples) // 2]
-                        ear_thresh = min(args.ear_thresh, max(0.15, 0.75 * open_ear))
+                        baseline_pitch = pitch_samples[len(pitch_samples) // 2]
+                        baseline_pitch = max(-25.0, min(25.0, baseline_pitch))
+                    # 75th percentile approximates open-eye EAR even if the
+                    # driver blinked or drooped during calibration
+                    open_ear = ear_samples[(len(ear_samples) * 3) // 4]
+                    ear_thresh = min(args.ear_thresh, max(0.18, 0.75 * open_ear))
                     print(f"Calibrated: baseline pitch {baseline_pitch:+.0f} deg, "
                           f"eye-closed threshold {ear_thresh:.2f}")
             elif looking_away:
