@@ -38,7 +38,7 @@ window to quit. Useful flags:
 --no-sound              disable the audio alarm
 --calibrate-secs 5      startup calibration length (0 disables)
 --closed-secs 3.0       seconds of closed eyes before microsleep alert
---yawn-thresh 0.55      mouth-open threshold for yawns
+--yawn-thresh 0.45      mouth-open threshold for yawns
 --pitch-thresh 20       downward head angle (degrees) that counts as nodding
 --yaw-limit 25          head turn beyond which eye checks pause (mirror checks)
 ```
@@ -54,6 +54,10 @@ Run `python Drowsiness_Detection.py --help` for the full list.
   the eye/mouth measurements instead of accumulating toward a false alarm.
 - **Headless mode** runs without any display, ready for a small in-car
   computer that boots straight into detection.
+- **Driver absence**: losing the face briefly escalates warning → alarm
+  (a dropped head leaves the camera's view), but after ~20 s it assumes
+  the driver left the car, silences the alarm, resets the fatigue history,
+  and recalibrates automatically when someone sits back down.
 - A regular webcam only works in daylight; night use needs an infrared
   camera (a plug-in USB IR webcam works).
 

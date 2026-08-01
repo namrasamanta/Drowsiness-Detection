@@ -123,7 +123,7 @@ def parse_args():
                    help="rolling window in seconds for PERCLOS")
     p.add_argument("--perclos-thresh", type=float, default=0.30,
                    help="PERCLOS fraction that triggers a fatigue warning")
-    p.add_argument("--yawn-thresh", type=float, default=0.55,
+    p.add_argument("--yawn-thresh", type=float, default=0.45,
                    help="mouth aspect ratio above this counts as yawning")
     p.add_argument("--yawn-secs", type=float, default=1.0,
                    help="seconds of continuous open mouth to register one yawn")
@@ -137,6 +137,9 @@ def parse_args():
                    help="seconds without a detected face before warning")
     p.add_argument("--face-lost-alarm-secs", type=float, default=4.0,
                    help="seconds without a detected face before the alarm sounds")
+    p.add_argument("--absent-secs", type=float, default=20.0,
+                   help="seconds without a face before assuming the driver "
+                        "left: alarm stops, state resets, recalibrates on return")
     p.add_argument("--detect-every", type=int, default=5,
                    help="run face detection every Nth frame once locked on "
                         "(landmarks still run every frame)")
@@ -346,13 +349,29 @@ def main():
         else:
             closed_since = yawn_since = nod_since = None
             # a fully dropped head usually leaves the detector's view entirely,
-            # so prolonged face loss escalates from warning to alarm
+            # so prolonged face loss escalates from warning to alarm; a much
+            # longer loss means the driver left, which must not alarm forever
             if last_face_time is not None:
                 lost_for = now - last_face_time
-                if lost_for > args.face_lost_alarm_secs:
+                if lost_for > args.absent_secs:
+                    last_face_time = None
+                    eye_history.clear()
+                    yawn_times.clear()
+                    perclos = 0.0
+                    perclos_active = False
+                    ear_thresh = args.ear_thresh
+                    baseline_pitch = 0.0
+                    calibrated = args.calibrate_secs <= 0
+                    calib_end = None
+                    ear_samples = []
+                    pitch_samples = []
+                    print("Driver left the frame - waiting, will recalibrate on return.")
+                elif lost_for > args.face_lost_alarm_secs:
                     alerts.append(("facelost-alarm", "HEAD DOWN / DRIVER NOT VISIBLE"))
                 elif lost_for > args.face_lost_secs:
                     warnings.append(("facelost", "FACE NOT VISIBLE"))
+            else:
+                warnings.append(("waiting", "WAITING FOR DRIVER"))
 
         alarm.set(bool(alerts))
 
