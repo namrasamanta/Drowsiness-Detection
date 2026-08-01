@@ -203,6 +203,7 @@ def main():
     face_rect = None
     frame_idx = 0
     last_body_time = None
+    prev_seat_roi = None
 
     if args.headless:
         print("Drowsiness detection running headless - press Ctrl+C to stop.")
@@ -249,6 +250,7 @@ def main():
 
         if face_rect is not None:
             last_face_time = now
+            prev_seat_roi = None
             shape = face_utils.shape_to_np(predictor(gray, face_rect))
 
             left_eye = shape[l_start:l_end]
@@ -343,18 +345,30 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
         else:
             closed_since = yawn_since = nod_since = None
-            # face gone - check for an upper body so a slumped driver (head
-            # down, torso still in the seat) is never mistaken for an empty
-            # seat; only every 3rd frame, it matters at seconds granularity
-            if not body_cascade.empty() and frame_idx % 3 == 0:
+            # face gone - check whether someone is still in the seat, so a
+            # slumped driver (head down, torso present) is never mistaken
+            # for an empty seat. Two independent checks: the upper-body
+            # cascade (weak for seated close-ups) and motion in the seat
+            # region - even a still person breathes and sways, while an
+            # empty seat is static. Every 3rd frame is plenty.
+            if frame_idx % 3 == 0:
                 scale = args.detect_width / gray.shape[1]
                 small = cv2.resize(gray, (args.detect_width,
                                           int(gray.shape[0] * scale)))
-                if len(body_cascade.detectMultiScale(small, 1.1, 3,
-                                                     minSize=(60, 60))):
+                found_body = (not body_cascade.empty() and
+                              len(body_cascade.detectMultiScale(
+                                  small, 1.1, 3, minSize=(60, 60))) > 0)
+                sh, sw = small.shape
+                roi = small[sh // 3:, sw // 6:5 * sw // 6]
+                motion = False
+                if prev_seat_roi is not None and prev_seat_roi.shape == roi.shape:
+                    diff = cv2.absdiff(roi, prev_seat_roi)
+                    motion = (diff > 20).mean() > 0.015
+                prev_seat_roi = roi
+                if found_body or motion:
                     last_body_time = now
             body_present = (last_body_time is not None
-                            and now - last_body_time < 3.0)
+                            and now - last_body_time < 5.0)
 
             # a fully dropped head usually leaves the detector's view entirely,
             # so prolonged face loss escalates from warning to alarm; a long
