@@ -164,6 +164,10 @@ def main():
 
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(args.model)
+    # upper-body detector distinguishes "head down, driver slumped in the
+    # seat" (keep alarming) from "driver left the car" (go quiet)
+    body_cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_upperbody.xml")
     (l_start, l_end) = face_utils.FACIAL_LANDMARKS_68_IDXS["left_eye"]
     (r_start, r_end) = face_utils.FACIAL_LANDMARKS_68_IDXS["right_eye"]
     (m_start, m_end) = face_utils.FACIAL_LANDMARKS_68_IDXS["mouth"]
@@ -198,6 +202,7 @@ def main():
     last_frame_time = None
     face_rect = None
     frame_idx = 0
+    last_body_time = None
 
     if args.headless:
         print("Drowsiness detection running headless - press Ctrl+C to stop.")
@@ -325,24 +330,6 @@ def main():
                 else:
                     nod_since = None
 
-            # PERCLOS warning: evaluated even during look-aways so it doesn't
-            # flap when head yaw hovers at the limit, with hysteresis so a
-            # value sitting right at the threshold doesn't flicker either
-            while eye_history and now - eye_history[0][0] > args.perclos_window:
-                eye_history.popleft()
-            if calibrated and eye_history:
-                perclos = sum(c for _, c in eye_history) / len(eye_history)
-                window_full = now - eye_history[0][0] >= args.perclos_window * 0.8
-                if perclos_active:
-                    perclos_active = perclos > args.perclos_thresh * 0.9
-                else:
-                    perclos_active = window_full and perclos > args.perclos_thresh
-                if perclos_active:
-                    warnings.append(("perclos", f"FATIGUE - EYES CLOSED {perclos:.0%} "
-                                     f"OF LAST {args.perclos_window:.0f}s"))
-            else:
-                perclos_active = False
-
             hud = [f"FPS {fps:.0f}", f"EAR {ear:.2f}", f"MAR {mar:.2f}",
                    f"PERCLOS {perclos:.0%}", f"YAWNS/MIN {len(yawn_times)}"]
             if pitch is not None:
@@ -356,13 +343,28 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
         else:
             closed_since = yawn_since = nod_since = None
+            # face gone - check for an upper body so a slumped driver (head
+            # down, torso still in the seat) is never mistaken for an empty
+            # seat; only every 3rd frame, it matters at seconds granularity
+            if not body_cascade.empty() and frame_idx % 3 == 0:
+                scale = args.detect_width / gray.shape[1]
+                small = cv2.resize(gray, (args.detect_width,
+                                          int(gray.shape[0] * scale)))
+                if len(body_cascade.detectMultiScale(small, 1.1, 3,
+                                                     minSize=(60, 60))):
+                    last_body_time = now
+            body_present = (last_body_time is not None
+                            and now - last_body_time < 3.0)
+
             # a fully dropped head usually leaves the detector's view entirely,
-            # so prolonged face loss escalates from warning to alarm; a much
-            # longer loss means the driver left, which must not alarm forever
+            # so prolonged face loss escalates from warning to alarm; a long
+            # loss with no body either means the driver left - go quiet, but
+            # never while a body is still in the seat
             if last_face_time is not None:
                 lost_for = now - last_face_time
-                if lost_for > args.absent_secs:
+                if lost_for > args.absent_secs and not body_present:
                     last_face_time = None
+                    last_body_time = None
                     eye_history.clear()
                     yawn_times.clear()
                     perclos = 0.0
@@ -375,11 +377,34 @@ def main():
                     pitch_samples = []
                     print("Driver left the frame - waiting, will recalibrate on return.")
                 elif lost_for > args.face_lost_alarm_secs:
-                    alerts.append(("facelost-alarm", "HEAD DOWN / DRIVER NOT VISIBLE"))
+                    if body_present:
+                        alerts.append(("headdown-body",
+                                       "HEAD DOWN - DRIVER NOT RESPONDING"))
+                    else:
+                        alerts.append(("facelost-alarm",
+                                       "HEAD DOWN / DRIVER NOT VISIBLE"))
                 elif lost_for > args.face_lost_secs:
                     warnings.append(("facelost", "FACE NOT VISIBLE"))
             else:
                 warnings.append(("waiting", "WAITING FOR DRIVER"))
+
+        # PERCLOS warning: evaluated from the rolling history every frame -
+        # even during look-aways and momentary detection misses - so it can't
+        # flap; hysteresis keeps a value at the threshold from flickering too
+        while eye_history and now - eye_history[0][0] > args.perclos_window:
+            eye_history.popleft()
+        if calibrated and eye_history:
+            perclos = sum(c for _, c in eye_history) / len(eye_history)
+            window_full = now - eye_history[0][0] >= args.perclos_window * 0.8
+            if perclos_active:
+                perclos_active = perclos > args.perclos_thresh * 0.9
+            else:
+                perclos_active = window_full and perclos > args.perclos_thresh
+            if perclos_active:
+                warnings.append(("perclos", f"FATIGUE - EYES CLOSED {perclos:.0%} "
+                                 f"OF LAST {args.perclos_window:.0f}s"))
+        else:
+            perclos_active = False
 
         alarm.set(bool(alerts))
 

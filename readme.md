@@ -54,10 +54,13 @@ Run `python Drowsiness_Detection.py --help` for the full list.
   the eye/mouth measurements instead of accumulating toward a false alarm.
 - **Headless mode** runs without any display, ready for a small in-car
   computer that boots straight into detection.
-- **Driver absence**: losing the face briefly escalates warning → alarm
-  (a dropped head leaves the camera's view), but after ~20 s it assumes
-  the driver left the car, silences the alarm, resets the fatigue history,
-  and recalibrates automatically when someone sits back down.
+- **Driver absence vs. slumped driver**: losing the face briefly escalates
+  warning → alarm (a dropped head leaves the camera's view). While the face
+  is lost, an upper-body detector checks whether someone is still in the
+  seat — if a body is visible the alarm keeps sounding indefinitely
+  ("DRIVER NOT RESPONDING"). Only when neither face nor body is seen for
+  ~20 s does it assume the driver left: the alarm silences, fatigue history
+  resets, and it recalibrates automatically when someone sits back down.
 - A regular webcam only works in daylight; night use needs an infrared
   camera (a plug-in USB IR webcam works).
 
