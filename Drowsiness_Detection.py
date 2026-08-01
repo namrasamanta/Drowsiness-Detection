@@ -58,8 +58,11 @@ def mouth_aspect_ratio(mouth):
     return (A + B + C) / (3.0 * D)
 
 
-def head_pitch_degrees(shape, frame_shape):
-    """Pitch of the head in degrees; positive = looking down."""
+def head_pose_degrees(shape, frame_shape):
+    """(pitch, yaw) of the head in degrees.
+
+    Positive pitch = chin toward chest; yaw = turning left/right.
+    """
     h, w = frame_shape[:2]
     image_points = np.array([shape[i] for i in HEAD_LANDMARK_IDXS], dtype="double")
     camera_matrix = np.array([
@@ -70,16 +73,16 @@ def head_pitch_degrees(shape, frame_shape):
     ok, rvec, _ = cv2.solvePnP(HEAD_MODEL_POINTS, image_points, camera_matrix,
                                np.zeros((4, 1)), flags=cv2.SOLVEPNP_ITERATIVE)
     if not ok:
-        return None
+        return None, None
     rmat, _ = cv2.Rodrigues(rvec)
     angles, *_ = cv2.RQDecomp3x3(rmat)
-    pitch = angles[0]
+    pitch, yaw = angles[0], angles[1]
     # frontal pose decomposes near +/-180; fold it back around 0
     if pitch > 90:
         pitch -= 180
     elif pitch < -90:
         pitch += 180
-    return -pitch  # flip so that "chin toward chest" is positive
+    return -pitch, yaw
 
 
 class Alarm:
@@ -139,6 +142,14 @@ def parse_args():
                         "(landmarks still run every frame)")
     p.add_argument("--detect-width", type=int, default=320,
                    help="downscaled frame width used for face detection")
+    p.add_argument("--calibrate-secs", type=float, default=5.0,
+                   help="startup seconds spent learning the driver's normal "
+                        "head angle and eye openness (0 to disable)")
+    p.add_argument("--yaw-limit", type=float, default=25.0,
+                   help="head turn in degrees beyond which eye/mouth checks "
+                        "pause (mirror and shoulder checks)")
+    p.add_argument("--headless", action="store_true",
+                   help="run without a video window (Ctrl+C to stop)")
     p.add_argument("--no-sound", action="store_true", help="disable the audio alarm")
     p.add_argument("--model", default="models/shape_predictor_68_face_landmarks.dat",
                    help="path to the dlib 68-landmark model")
@@ -167,6 +178,14 @@ def main():
     yawn_since = None
     nod_since = None
     yawn_open = False
+    perclos = 0.0
+    perclos_active = False
+    ear_thresh = args.ear_thresh
+    baseline_pitch = 0.0
+    calibrated = args.calibrate_secs <= 0
+    calib_end = None
+    ear_samples = []
+    pitch_samples = []
     eye_history = deque()   # (timestamp, closed?)
     yawn_times = deque()    # timestamps of completed yawns
     last_face_time = None
@@ -177,7 +196,10 @@ def main():
     face_rect = None
     frame_idx = 0
 
-    print("Drowsiness detection running - press 'q' in the video window to quit.")
+    if args.headless:
+        print("Drowsiness detection running headless - press Ctrl+C to stop.")
+    else:
+        print("Drowsiness detection running - press 'q' in the video window to quit.")
 
     while True:
         ret, frame = cap.read()
@@ -226,57 +248,98 @@ def main():
             mouth = shape[m_start:m_end]
             ear = (eye_aspect_ratio(left_eye) + eye_aspect_ratio(right_eye)) / 2.0
             mar = mouth_aspect_ratio(mouth)
-            pitch = head_pitch_degrees(shape, frame.shape)
+            pitch, yaw = head_pose_degrees(shape, frame.shape)
 
             for pts in (left_eye, right_eye, mouth):
                 cv2.drawContours(frame, [cv2.convexHull(pts)], -1, GREEN, 1)
 
-            # 1. microsleep: sustained eye closure
-            eyes_closed = ear < args.ear_thresh
-            if eyes_closed:
-                closed_since = closed_since or now
-                if now - closed_since >= args.closed_secs:
-                    alerts.append(("microsleep", "MICROSLEEP - EYES CLOSED"))
-            else:
-                closed_since = None
+            looking_away = yaw is not None and abs(yaw) > args.yaw_limit
 
-            # 2. PERCLOS over rolling window
-            eye_history.append((now, eyes_closed))
+            if not calibrated:
+                # learn this driver's normal pose and eye openness first,
+                # so camera angle and eye shape don't skew the thresholds
+                calib_end = calib_end or now + args.calibrate_secs
+                ear_samples.append(ear)
+                if pitch is not None:
+                    pitch_samples.append(pitch)
+                cv2.putText(frame, "CALIBRATING - look ahead normally", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, YELLOW, 2)
+                if now >= calib_end:
+                    calibrated = True
+                    if pitch_samples:
+                        baseline_pitch = sorted(pitch_samples)[len(pitch_samples) // 2]
+                    if ear_samples:
+                        open_ear = sorted(ear_samples)[len(ear_samples) // 2]
+                        ear_thresh = min(args.ear_thresh, max(0.15, 0.75 * open_ear))
+                    print(f"Calibrated: baseline pitch {baseline_pitch:+.0f} deg, "
+                          f"eye-closed threshold {ear_thresh:.2f}")
+            elif looking_away:
+                # eye/mouth landmarks are unreliable at an angle; a mirror or
+                # shoulder check must not accumulate toward any alert
+                closed_since = yawn_since = nod_since = None
+            else:
+                # 1. microsleep: sustained eye closure
+                eyes_closed = ear < ear_thresh
+                if eyes_closed:
+                    closed_since = closed_since or now
+                    if now - closed_since >= args.closed_secs:
+                        alerts.append(("microsleep", "MICROSLEEP - EYES CLOSED"))
+                else:
+                    closed_since = None
+
+                # 2. collect PERCLOS samples (evaluated below, outside this
+                # branch, so the warning survives brief look-aways)
+                eye_history.append((now, eyes_closed))
+
+                # 3. yawning: sustained wide-open mouth, counted per minute
+                if mar > args.yawn_thresh:
+                    yawn_since = yawn_since or now
+                    if now - yawn_since >= args.yawn_secs and not yawn_open:
+                        yawn_open = True
+                        yawn_times.append(now)
+                else:
+                    yawn_since = None
+                    yawn_open = False
+                while yawn_times and now - yawn_times[0] > 60:
+                    yawn_times.popleft()
+                if len(yawn_times) >= args.yawns_per_minute:
+                    warnings.append(("yawns", f"FATIGUE - {len(yawn_times)} YAWNS "
+                                     "IN LAST MINUTE"))
+
+                # 4. head nod: pitched down relative to calibrated baseline
+                if pitch is not None and pitch - baseline_pitch > args.pitch_thresh:
+                    nod_since = nod_since or now
+                    if now - nod_since >= args.nod_secs:
+                        alerts.append(("headdrop", "HEAD DROP - NODDING OFF"))
+                else:
+                    nod_since = None
+
+            # PERCLOS warning: evaluated even during look-aways so it doesn't
+            # flap when head yaw hovers at the limit, with hysteresis so a
+            # value sitting right at the threshold doesn't flicker either
             while eye_history and now - eye_history[0][0] > args.perclos_window:
                 eye_history.popleft()
-            perclos = sum(c for _, c in eye_history) / len(eye_history)
-            window_full = now - eye_history[0][0] >= args.perclos_window * 0.8
-            if window_full and perclos > args.perclos_thresh:
-                warnings.append(("perclos", f"FATIGUE - EYES CLOSED {perclos:.0%} "
-                                 f"OF LAST {args.perclos_window:.0f}s"))
-
-            # 3. yawning: sustained wide-open mouth, counted per minute
-            if mar > args.yawn_thresh:
-                yawn_since = yawn_since or now
-                if now - yawn_since >= args.yawn_secs and not yawn_open:
-                    yawn_open = True
-                    yawn_times.append(now)
+            if calibrated and eye_history:
+                perclos = sum(c for _, c in eye_history) / len(eye_history)
+                window_full = now - eye_history[0][0] >= args.perclos_window * 0.8
+                if perclos_active:
+                    perclos_active = perclos > args.perclos_thresh * 0.9
+                else:
+                    perclos_active = window_full and perclos > args.perclos_thresh
+                if perclos_active:
+                    warnings.append(("perclos", f"FATIGUE - EYES CLOSED {perclos:.0%} "
+                                     f"OF LAST {args.perclos_window:.0f}s"))
             else:
-                yawn_since = None
-                yawn_open = False
-            while yawn_times and now - yawn_times[0] > 60:
-                yawn_times.popleft()
-            if len(yawn_times) >= args.yawns_per_minute:
-                warnings.append(("yawns", f"FATIGUE - {len(yawn_times)} YAWNS "
-                                 "IN LAST MINUTE"))
-
-            # 4. head nod: pitched down for sustained frames
-            if pitch is not None and pitch > args.pitch_thresh:
-                nod_since = nod_since or now
-                if now - nod_since >= args.nod_secs:
-                    alerts.append(("headdrop", "HEAD DROP - NODDING OFF"))
-            else:
-                nod_since = None
+                perclos_active = False
 
             hud = [f"FPS {fps:.0f}", f"EAR {ear:.2f}", f"MAR {mar:.2f}",
                    f"PERCLOS {perclos:.0%}", f"YAWNS/MIN {len(yawn_times)}"]
             if pitch is not None:
-                hud.append(f"PITCH {pitch:+.0f}")
+                hud.append(f"PITCH {pitch - baseline_pitch:+.0f}")
+            if yaw is not None:
+                hud.append(f"YAW {yaw:+.0f}")
+            if looking_away:
+                hud.append("LOOKING AWAY")
             for i, text in enumerate(hud):
                 cv2.putText(frame, text, (10, frame.shape[0] - 10 - 18 * i),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
@@ -310,9 +373,10 @@ def main():
             print(time.strftime("[%H:%M:%S]"), line)
             last_status = status
 
-        cv2.imshow("Drowsiness Detection", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        if not args.headless:
+            cv2.imshow("Drowsiness Detection", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
     alarm.set(False)
     cap.release()
@@ -320,4 +384,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nStopped.")

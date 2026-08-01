@@ -1,17 +1,18 @@
 # Drowsiness Detection 😴 🚗
 
 Real-time driver drowsiness detection from a webcam, using OpenCV and dlib's
-68-point facial landmarks. Instead of only checking for closed eyes, it
-combines four fatigue signals:
+68-point facial landmarks. It combines four fatigue signals rather than a
+single eyes-closed check:
 
 | Signal | How it's measured | Response |
 |---|---|---|
-| **Microsleep** | Eye Aspect Ratio (EAR) below threshold for ~20 consecutive frames | 🔴 Alert + alarm |
+| **Microsleep** | Eye Aspect Ratio (EAR) below threshold for 3 s | 🔴 Alert + alarm |
 | **PERCLOS** | % of eye closure over a rolling 30 s window (standard fatigue metric) | 🟡 Warning |
 | **Yawning** | Mouth Aspect Ratio (MAR) spikes, ≥2 yawns within a minute | 🟡 Warning |
 | **Head nodding** | Head pitch from solvePnP pose estimation; face lost from view | 🔴 Alert / 🟡 Warning |
 
-Red alerts sound a repeating audio alarm (Windows `winsound`; terminal bell elsewhere).
+Red alerts sound a repeating audio alarm (Windows `winsound`; terminal bell
+elsewhere).
 
 ## Setup
 
@@ -27,18 +28,34 @@ The dlib 68-landmark model is included in `models/`.
 python Drowsiness_Detection.py
 ```
 
-Press `q` in the video window to quit. Useful flags:
+On startup it spends 5 seconds **calibrating** — look ahead normally so it
+can learn your usual head angle and eye openness. Press `q` in the video
+window to quit. Useful flags:
 
 ```
+--headless              no video window (for screen-less devices; Ctrl+C stops)
 --camera 1              use a different webcam
 --no-sound              disable the audio alarm
---ear-thresh 0.25       eye-closed threshold (lower = less sensitive)
+--calibrate-secs 5      startup calibration length (0 disables)
 --closed-secs 3.0       seconds of closed eyes before microsleep alert
 --yawn-thresh 0.55      mouth-open threshold for yawns
 --pitch-thresh 20       downward head angle (degrees) that counts as nodding
+--yaw-limit 25          head turn beyond which eye checks pause (mirror checks)
 ```
 
 Run `python Drowsiness_Detection.py --help` for the full list.
+
+## Designed for in-car use
+
+- **Calibration** makes the pitch baseline relative to the camera's mounting
+  angle, so a dashboard camera looking up at the driver works the same as a
+  laptop webcam.
+- **Look-away tolerance**: mirror and shoulder checks (large head yaw) pause
+  the eye/mouth measurements instead of accumulating toward a false alarm.
+- **Headless mode** runs without any display, ready for a small in-car
+  computer that boots straight into detection.
+- A regular webcam only works in daylight; night use needs an infrared
+  camera (a plug-in USB IR webcam works).
 
 ## Low-spec devices
 
@@ -62,11 +79,10 @@ Each eye is described by 6 landmark points; the EAR is the ratio of the
 vertical eye openings to the horizontal width — it collapses toward 0 when
 the eye closes. The MAR does the same for the inner lips. Head pose is
 recovered by fitting six landmarks (nose, chin, eye and mouth corners) to a
-3D face model with `cv2.solvePnP`, and the pitch angle indicates a drooping
-head. Live values for all metrics are shown in the bottom-left HUD.
+3D face model with `cv2.solvePnP`; pitch (relative to the calibrated
+baseline) indicates a drooping head and yaw indicates looking away. Live
+values for all metrics are shown in the bottom-left HUD.
 
-## Credits
+## License
 
-Based on the original [Drowsiness_Detection](https://github.com/akshaybahadur21/Drowsiness_Detection)
-by Akshay Bahadur (MIT license) and the EAR technique from
-[PyImageSearch](https://www.pyimagesearch.com/2017/05/08/drowsiness-detection-opencv/).
+MIT — see [LICENSE.txt](LICENSE.txt).
