@@ -93,6 +93,23 @@ on private networks. The audio alarm still plays from the PC.
 - A regular webcam only works in daylight; night use needs an infrared
   camera (a plug-in USB IR webcam works).
 
+## Event snapshots (incident evidence)
+
+Every red alert is recorded to the `events/` folder: a rolling ~8-second
+pre-alert buffer plus snapshots every 0.5 s during the alert, each frame
+stamped with date and time, plus a one-line entry in `events/log.txt`.
+After an incident, the folder shows what the driver's state was *before*
+and *during* the alarm.
+
+```
+events/20260802_031045_microsleep/pre_000.jpg ... alert_012.jpg
+```
+
+Notes: this documents **driver state** (alert vs. drowsy/distracted); pair
+it with a road-facing dashcam for a complete accident record. Timestamps
+come from the system clock — keep it accurate. Old events are never
+auto-deleted; clear the folder periodically. Disable with `--events-dir ""`.
+
 ## Low-spec devices
 
 Face detection dominates the frame cost, so it runs on a downscaled frame

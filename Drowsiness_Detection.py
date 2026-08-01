@@ -12,6 +12,7 @@ Quit: press 'q' in the video window.
 
 import argparse
 import math
+import os
 import socket
 import threading
 import time
@@ -234,6 +235,9 @@ def parse_args():
                    help="run without a video window (Ctrl+C to stop)")
     p.add_argument("--debug", action="store_true",
                    help="log presence-detection internals while the face is lost")
+    p.add_argument("--events-dir", default="events",
+                   help="folder for timestamped alert snapshots (evidence of "
+                        "each incident); pass an empty string to disable")
     p.add_argument("--no-sound", action="store_true", help="disable the audio alarm")
     p.add_argument("--model", default="models/shape_predictor_68_face_landmarks.dat",
                    help="path to the dlib 68-landmark model")
@@ -293,6 +297,12 @@ def main():
     last_body_time = None
     seat_snapshot = None      # seat region as it looked with the driver present
     roi_history = deque()     # recent seat regions, for slow-motion detection
+    snap_buffer = deque()     # rolling pre-alert frames for event evidence
+    last_snap = 0.0
+    event_dir = None
+    event_count = 0
+    last_event_snap = 0.0
+    last_event_end = 0.0
 
     if args.headless:
         print("Drowsiness detection running headless - press Ctrl+C to stop.")
@@ -565,6 +575,45 @@ def main():
             line = " | ".join(text for _, text in alerts + warnings) or "OK"
             print(time.strftime("[%H:%M:%S]"), line)
             last_status = status
+
+        # wall-clock timestamp burned into every frame, so saved event
+        # snapshots carry when-it-happened evidence
+        cv2.putText(frame, time.strftime("%Y-%m-%d %H:%M:%S"),
+                    (frame.shape[1] - 175, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, WHITE, 1)
+
+        if args.events_dir:
+            # rolling pre-alert buffer: ~8 s at 5 fps
+            if now - last_snap >= 0.2:
+                last_snap = now
+                ok, jpg = cv2.imencode(".jpg", frame,
+                                       [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    snap_buffer.append((now, jpg.tobytes()))
+                while snap_buffer and now - snap_buffer[0][0] > 8.0:
+                    snap_buffer.popleft()
+            if alerts and event_dir is None and now - last_event_end > 5.0:
+                name = time.strftime("%Y%m%d_%H%M%S") + "_" + alerts[0][0]
+                event_dir = os.path.join(args.events_dir, name)
+                os.makedirs(event_dir, exist_ok=True)
+                for i, (_, jpg_bytes) in enumerate(snap_buffer):
+                    with open(os.path.join(event_dir, f"pre_{i:03d}.jpg"), "wb") as f:
+                        f.write(jpg_bytes)
+                with open(os.path.join(args.events_dir, "log.txt"), "a") as f:
+                    f.write(time.strftime("%Y-%m-%d %H:%M:%S ")
+                            + " | ".join(text for _, text in alerts) + "\n")
+                event_count = 0
+                print(f"Recording event evidence to {event_dir}")
+            if event_dir is not None:
+                if alerts and event_count < 120:
+                    if now - last_event_snap >= 0.5:
+                        last_event_snap = now
+                        event_count += 1
+                        cv2.imwrite(os.path.join(
+                            event_dir, f"alert_{event_count:03d}.jpg"), frame)
+                elif not alerts:
+                    event_dir = None
+                    last_event_end = now
 
         if stream is not None:
             ok, jpg = cv2.imencode(".jpg", frame,
