@@ -12,9 +12,11 @@ Quit: press 'q' in the video window.
 
 import argparse
 import math
+import socket
 import threading
 import time
 from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 import dlib
@@ -85,6 +87,73 @@ def head_pose_degrees(shape, frame_shape):
     return -pitch, yaw
 
 
+class VideoStream:
+    """Holds the latest annotated JPEG and serves it as an MJPEG web page,
+    so a phone on the same Wi-Fi can watch the detection live."""
+
+    INDEX = (b'<!doctype html><title>Drowsiness Detection</title>'
+             b'<body style="margin:0;background:#000;display:grid;'
+             b'place-items:center;min-height:100vh">'
+             b'<img src="/stream" style="max-width:100vw;max-height:100vh">')
+
+    def __init__(self):
+        self._frame = None
+        self._cond = threading.Condition()
+
+    def update(self, jpeg_bytes):
+        with self._cond:
+            self._frame = jpeg_bytes
+            self._cond.notify_all()
+
+    def wait_frame(self):
+        with self._cond:
+            self._cond.wait(timeout=1.0)
+            return self._frame
+
+    def start(self, port):
+        stream = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                if self.path == "/stream":
+                    self.send_response(200)
+                    self.send_header("Content-Type",
+                                     "multipart/x-mixed-replace; boundary=frame")
+                    self.end_headers()
+                    try:
+                        while True:
+                            jpg = stream.wait_frame()
+                            if jpg is None:
+                                continue
+                            self.wfile.write(b"--frame\r\n"
+                                             b"Content-Type: image/jpeg\r\n\r\n")
+                            self.wfile.write(jpg)
+                            self.wfile.write(b"\r\n")
+                    except (ConnectionAbortedError, ConnectionResetError,
+                            BrokenPipeError):
+                        pass
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(VideoStream.INDEX)
+
+        server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+            probe.close()
+        except OSError:
+            lan_ip = "127.0.0.1"
+        print(f"Live view: http://{lan_ip}:{port}  "
+              "(open on a phone on the same Wi-Fi)")
+
+
 class Alarm:
     """Plays a repeating beep on a background thread while active."""
 
@@ -114,7 +183,13 @@ class Alarm:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Multi-signal drowsiness detection")
-    p.add_argument("--camera", type=int, default=0, help="webcam index")
+    p.add_argument("--camera", default="0",
+                   help="webcam index, or a stream URL such as "
+                        "http://PHONE-IP:8080/video from the IP Webcam app")
+    p.add_argument("--serve", nargs="?", const=8000, type=int, default=None,
+                   metavar="PORT",
+                   help="serve the annotated video over Wi-Fi so a phone "
+                        "browser can watch it (default port 8000)")
     p.add_argument("--ear-thresh", type=float, default=0.25,
                    help="eye aspect ratio below this counts as closed")
     p.add_argument("--closed-secs", type=float, default=3.0,
@@ -174,12 +249,18 @@ def main():
     (r_start, r_end) = face_utils.FACIAL_LANDMARKS_68_IDXS["right_eye"]
     (m_start, m_end) = face_utils.FACIAL_LANDMARKS_68_IDXS["mouth"]
 
-    cap = cv2.VideoCapture(args.camera)
+    source = int(args.camera) if args.camera.isdigit() else args.camera
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         raise SystemExit(f"Could not open camera {args.camera}")
     # ask the camera for a small frame so high-res capture never costs us
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    stream = None
+    if args.serve:
+        stream = VideoStream()
+        stream.start(args.serve)
 
     alarm = Alarm(enabled=not args.no_sound)
 
@@ -470,6 +551,12 @@ def main():
             line = " | ".join(text for _, text in alerts + warnings) or "OK"
             print(time.strftime("[%H:%M:%S]"), line)
             last_status = status
+
+        if stream is not None:
+            ok, jpg = cv2.imencode(".jpg", frame,
+                                   [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ok:
+                stream.update(jpg.tobytes())
 
         if not args.headless:
             cv2.imshow("Drowsiness Detection", frame)

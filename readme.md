@@ -45,6 +45,33 @@ window to quit. Useful flags:
 
 Run `python Drowsiness_Detection.py --help` for the full list.
 
+## Testing with a phone
+
+Both directions work over your Wi-Fi (phone and PC on the same network):
+
+**Phone as the camera** — install a camera-streaming app (e.g. *IP Webcam*
+on Android), start its server, and point the detector at the stream URL the
+app shows:
+
+```
+python Drowsiness_Detection.py --camera http://192.168.1.42:8080/video
+```
+
+This is a realistic dry run for in-car mounting: prop the phone where a
+dashboard camera would sit.
+
+**Phone as the screen** — stream the annotated video (alerts, HUD) to a
+browser:
+
+```
+python Drowsiness_Detection.py --serve
+```
+
+The console prints a `http://<pc-ip>:8000` address — open it on the phone.
+Note that a phone cannot use `localhost` (that means the phone itself);
+always use the printed PC address. If Windows Firewall asks, allow Python
+on private networks. The audio alarm still plays from the PC.
+
 ## Designed for in-car use
 
 - **Calibration** makes the pitch baseline relative to the camera's mounting
