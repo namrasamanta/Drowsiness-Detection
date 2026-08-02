@@ -54,6 +54,40 @@
   #checklist li::marker { color: #3fd66a; }
   #checklist li b { color: #e6edf3; }
   #checklist { color: #8b949e; }
+  #demo {
+    background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+    padding: 14px 16px;
+  }
+  #demo h2 { font-size: .95rem; font-weight: 600; margin-bottom: 4px; }
+  #demo p { color: #8b949e; font-size: .8rem; margin-bottom: 8px; }
+  #demo svg { width: 100%; height: auto; display: block; }
+  .d-face { fill: #21262d; stroke: #484f58; stroke-width: 2; }
+  .d-mark { fill: none; stroke: #3fd66a; stroke-width: 2.5;
+            stroke-linecap: round; }
+  .d-title { fill: #e6edf3; font-size: 12px; font-weight: 600;
+             text-anchor: middle; }
+  .d-sub { fill: #8b949e; font-size: 10px; text-anchor: middle; }
+  .u-marks {
+    transform-box: fill-box; transform-origin: center;
+    fill: none; stroke: #3fd66a; stroke-width: 2.5; stroke-linecap: round;
+    animation: u-turn 8s ease-in-out infinite;
+  }
+  .u-ok  { fill: #3fd66a; animation: u-ok 8s infinite; }
+  .u-bad { fill: #d29922; animation: u-bad 8s infinite; }
+  .u-ok, .u-bad { font-size: 11px; font-weight: 600; text-anchor: middle; }
+  @keyframes u-turn {
+    0%, 25%   { transform: none; stroke: #3fd66a; }
+    32%, 45%  { transform: translateX(18px) scaleX(0.72); stroke: #d29922; }
+    52%, 62%  { transform: none; stroke: #3fd66a; }
+    68%, 80%  { transform: translateX(-8px) scaleX(0.94); stroke: #3fd66a; }
+    88%, 100% { transform: none; stroke: #3fd66a; }
+  }
+  @keyframes u-ok {
+    0%, 25% { opacity: 1; } 32%, 45% { opacity: 0; } 52%, 100% { opacity: 1; }
+  }
+  @keyframes u-bad {
+    0%, 25% { opacity: 0; } 32%, 45% { opacity: 1; } 52%, 100% { opacity: 0; }
+  }
 </style>
 </head>
 <body>
@@ -75,6 +109,40 @@
           normally while it calibrates to your eyes and posture.</li>
       <li><b>Keep your volume on</b> — alerts beep in the browser.</li>
     </ul>
+  </div>
+  <div id="demo">
+    <h2>How it works</h2>
+    <p>Sit facing the camera. Small head turns are fine, but beyond about
+       <b>25&deg; to either side</b> your eyes can't be measured, so checks
+       pause — and staying turned away for a few seconds raises a
+       distraction alert.</p>
+    <svg viewBox="0 0 480 175" role="img"
+         aria-label="Animated demo: keep your face within 25 degrees of the camera">
+      <!-- face that turns side to side -->
+      <circle cx="150" cy="85" r="40" class="d-face"/>
+      <g class="u-marks">
+        <ellipse cx="135" cy="75" rx="9" ry="5"/>
+        <ellipse cx="165" cy="75" rx="9" ry="5"/>
+        <ellipse cx="150" cy="101" rx="10" ry="4"/>
+      </g>
+      <text x="150" y="158" class="u-ok">&#10003; Tracking</text>
+      <text x="150" y="158" class="u-bad">&#9208; Paused &#8212; face the camera</text>
+      <!-- angle gauge: green zone is ±25° -->
+      <path d="M 295.5 96.1 A 45 45 0 0 1 364.5 96.1" fill="none"
+            stroke="#30363d" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 310.9 84.2 A 45 45 0 0 1 349.1 84.2" fill="none"
+            stroke="#3fd66a" stroke-width="5" stroke-linecap="round"/>
+      <text x="330" y="70" class="d-sub">&#177;25&#176;</text>
+      <g stroke="#e6edf3" stroke-width="2.5" stroke-linecap="round">
+        <line x1="330" y1="125" x2="330" y2="88"/>
+        <circle cx="330" cy="125" r="3.5" fill="#e6edf3" stroke="none"/>
+        <animateTransform attributeName="transform" type="rotate"
+          values="0 330 125;0 330 125;40 330 125;40 330 125;0 330 125;0 330 125;-18 330 125;-18 330 125;0 330 125;0 330 125"
+          keyTimes="0;0.25;0.32;0.45;0.52;0.62;0.68;0.8;0.88;1"
+          dur="8s" repeatCount="indefinite"/>
+      </g>
+      <text x="330" y="158" class="d-sub">stay inside the green zone</text>
+    </svg>
   </div>
   <button id="start">Start camera</button>
   <div id="error" hidden></div>
@@ -118,7 +186,7 @@ async function start() {
   video.srcObject = stream;
   await video.play();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  $("start").hidden = $("checklist").hidden = true;
+  $("start").hidden = $("checklist").hidden = $("demo").hidden = true;
   $("stage").hidden = banner.hidden = $("metrics").hidden = false;
   loop();
   beepLoop();
