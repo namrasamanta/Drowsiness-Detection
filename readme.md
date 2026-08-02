@@ -72,6 +72,31 @@ Note that a phone cannot use `localhost` (that means the phone itself);
 always use the printed PC address. If Windows Firewall asks, allow Python
 on private networks. The audio alarm still plays from the PC.
 
+## Host it online (visitor's own camera)
+
+`web_server.py` turns the PC into a web server: whoever opens the page is
+asked for **camera permission in their browser**, their frames stream to
+this PC for analysis, and alerts/metrics render live on the page (alarm
+beeps play in the browser). Each visitor gets an independent session with
+its own calibration.
+
+```
+python web_server.py            # then open http://localhost:8000
+```
+
+Browsers only allow camera access on HTTPS pages (`localhost` is the one
+exception), so to put it online expose the port through a tunnel that
+provides HTTPS, and share the printed `https://` URL:
+
+```
+cloudflared tunnel --url http://localhost:8000     # no account needed
+ngrok http 8000                                    # alternative
+```
+
+Notes: analysis runs on the PC, so a few concurrent visitors are fine but
+it is not built for a crowd; frames are processed in memory and never
+stored — the server keeps only a text event log (`events/log.txt`).
+
 ## Designed for in-car use
 
 - **Calibration** makes the pitch baseline relative to the camera's mounting

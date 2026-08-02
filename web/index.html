@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drowsiness Detection</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: system-ui, sans-serif;
+    background: #0d1117; color: #e6edf3;
+    min-height: 100vh; display: grid; place-items: center; padding: 16px;
+  }
+  main { width: min(680px, 100%); display: grid; gap: 12px; }
+  h1 { font-size: 1.2rem; font-weight: 600; }
+  h1 small { color: #8b949e; font-weight: 400; margin-left: 8px; }
+  .stage {
+    position: relative; border-radius: 12px; overflow: hidden;
+    background: #000; aspect-ratio: 4 / 3;
+  }
+  .stage video, .stage canvas {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; transform: scaleX(-1);  /* mirror like a mirror */
+  }
+  #banner {
+    border-radius: 10px; padding: 12px 16px; font-weight: 600;
+    text-align: center; background: #21262d; transition: background .2s;
+  }
+  #banner.ok       { background: #1a5c2e; }
+  #banner.warn     { background: #7a5b00; }
+  #banner.alert    { background: #a40e26; animation: flash 0.7s infinite; }
+  #banner.neutral  { background: #21262d; color: #8b949e; }
+  @keyframes flash { 50% { background: #d81b3f; } }
+  #metrics { display: flex; flex-wrap: wrap; gap: 8px; }
+  #metrics span {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 4px 10px; font-size: .82rem; color: #8b949e;
+  }
+  #metrics span b { color: #e6edf3; font-weight: 600; margin-left: 4px; }
+  button {
+    font: inherit; font-weight: 600; color: #fff; background: #238636;
+    border: 0; border-radius: 10px; padding: 14px; cursor: pointer;
+  }
+  button:hover { background: #2ea043; }
+  #error { color: #ff7b72; font-size: .9rem; white-space: pre-wrap; }
+  footer { color: #8b949e; font-size: .78rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>😴 Drowsiness Detection <small>runs live on your camera</small></h1>
+  <button id="start">Start camera</button>
+  <div id="error" hidden></div>
+  <div class="stage" hidden id="stage">
+    <video id="cam" playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div id="banner" class="neutral" hidden>Waiting…</div>
+  <div id="metrics" hidden></div>
+  <footer>Frames are analyzed on the host server.
+  Sound plays on alerts — keep volume on.</footer>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const video = $("cam"), overlay = $("overlay"), banner = $("banner");
+const sid = (crypto.randomUUID ? crypto.randomUUID()
+             : Date.now() + "-" + Math.random().toString(36).slice(2));
+const cap = document.createElement("canvas");
+const capCtx = cap.getContext("2d");
+let alertActive = false, audioCtx = null, lastRtt = 0;
+
+$("start").addEventListener("click", start);
+
+async function start() {
+  $("error").hidden = true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return fail("Camera access needs a secure page.\n" +
+      "Open this site via https:// (or http://localhost on the host PC).");
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 640 }, height: { ideal: 480 },
+               facingMode: "user" },
+      audio: false,
+    });
+  } catch (e) {
+    return fail("Camera permission was denied or no camera found.\n(" + e.message + ")");
+  }
+  video.srcObject = stream;
+  await video.play();
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  $("start").hidden = true;
+  $("stage").hidden = banner.hidden = $("metrics").hidden = false;
+  loop();
+  beepLoop();
+}
+
+function fail(msg) {
+  const el = $("error");
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+async function loop() {
+  if (!video.videoWidth) { setTimeout(loop, 100); return; }
+  cap.width = 480;
+  cap.height = Math.round(480 * video.videoHeight / video.videoWidth);
+  capCtx.drawImage(video, 0, 0, cap.width, cap.height);
+  const blob = await new Promise(r => cap.toBlob(r, "image/jpeg", 0.7));
+  const t0 = performance.now();
+  try {
+    const resp = await fetch("/analyze", {
+      method: "POST",
+      headers: { "X-Session": sid, "Content-Type": "image/jpeg" },
+      body: blob,
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    lastRtt = performance.now() - t0;
+    render(await resp.json());
+  } catch (e) {
+    alertActive = false;
+    setBanner("neutral", "Server unreachable — retrying…");
+  }
+  // ~8 fps max, and never faster than the server answers
+  setTimeout(loop, Math.max(0, 125 - (performance.now() - t0)));
+}
+
+function render(d) {
+  alertActive = d.alerts.length > 0;
+  if (d.alerts.length)        setBanner("alert", "⚠ " + d.alerts.join("  •  "));
+  else if (d.warnings.length) setBanner("warn", d.warnings.join("  •  "));
+  else if (d.state === "calibrating")
+    setBanner("neutral", "Calibrating — look at the camera normally…");
+  else if (d.state === "waiting")
+    setBanner("neutral", "Position your face in view");
+  else if (d.state === "looking_away")
+    setBanner("neutral", "Looking away — checks paused");
+  else setBanner("ok", "Monitoring — you look awake ✅");
+
+  const m = d.metrics, chips = [];
+  if (m.ear !== undefined)  chips.push(["EAR", m.ear.toFixed(2)]);
+  if (m.mar !== undefined)  chips.push(["MAR", m.mar.toFixed(2)]);
+  chips.push(["PERCLOS", Math.round((m.perclos || 0) * 100) + "%"]);
+  chips.push(["Yawns/min", m.yawns_per_min ?? 0]);
+  if (m.pitch !== undefined) chips.push(["Pitch", m.pitch + "°"]);
+  if (m.yaw !== undefined)   chips.push(["Yaw", m.yaw + "°"]);
+  chips.push(["Latency", Math.round(lastRtt) + " ms"]);
+  $("metrics").innerHTML = chips
+    .map(([k, v]) => `<span>${k}<b>${v}</b></span>`).join("");
+
+  drawLandmarks(d.landmarks);
+}
+
+function drawLandmarks(lm) {
+  const w = overlay.clientWidth, h = overlay.clientHeight;
+  if (overlay.width !== w) { overlay.width = w; overlay.height = h; }
+  const ctx = overlay.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  if (!lm) return;
+  // the overlay covers the video with object-fit:cover — same scaling here
+  const s = Math.max(w / cap.width, h / cap.height);
+  const ox = (w - cap.width * s) / 2, oy = (h - cap.height * s) / 2;
+  ctx.strokeStyle = alertActive ? "#ff4d6a" : "#3fd66a";
+  ctx.lineWidth = 2;
+  for (const part of [lm.left_eye, lm.right_eye, lm.mouth]) {
+    ctx.beginPath();
+    part.forEach(([x, y], i) =>
+      ctx[i ? "lineTo" : "moveTo"](x * s + ox, y * s + oy));
+    ctx.closePath();
+    ctx.stroke();
+  }
+}
+
+function setBanner(cls, text) {
+  banner.className = cls;
+  banner.textContent = text;
+}
+
+function beepLoop() {
+  if (alertActive && audioCtx) { tone(1200, 0, 0.22); tone(900, 0.28, 0.22); }
+  setTimeout(beepLoop, 700);
+}
+
+function tone(freq, delay, dur) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const t = audioCtx.currentTime + delay;
+  osc.frequency.value = freq;
+  osc.connect(gain).connect(audioCtx.destination);
+  gain.gain.setValueAtTime(0.25, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.start(t);
+  osc.stop(t + dur);
+}
+</script>
+</body>
+</html>
