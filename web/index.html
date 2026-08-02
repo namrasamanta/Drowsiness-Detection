@@ -45,15 +45,21 @@
   button:hover { background: #2ea043; }
   #error { color: #ff7b72; font-size: .9rem; white-space: pre-wrap; }
   footer { color: #8b949e; font-size: .78rem; }
-  #checklist {
+  #checklist, #features {
     background: #161b22; border: 1px solid #30363d; border-radius: 12px;
-    padding: 14px 16px; font-size: .88rem;
+    padding: 14px 16px; font-size: .88rem; color: #8b949e;
   }
-  #checklist h2 { font-size: .95rem; font-weight: 600; margin-bottom: 8px; }
-  #checklist ul { margin: 0; padding-left: 20px; display: grid; gap: 5px; }
+  #checklist h2, #features h2 {
+    font-size: .95rem; font-weight: 600; margin-bottom: 8px; color: #e6edf3;
+  }
+  #checklist ul, #features ul {
+    margin: 0; padding-left: 20px; display: grid; gap: 5px;
+  }
   #checklist li::marker { color: #3fd66a; }
-  #checklist li b { color: #e6edf3; }
-  #checklist { color: #8b949e; }
+  #features li::marker { color: #ff4d6a; }
+  #checklist li b, #features li b { color: #e6edf3; }
+  .tag-alarm { color: #ff4d6a; font-weight: 600; }
+  .tag-warn  { color: #d29922; font-weight: 600; }
   #demo {
     background: #161b22; border: 1px solid #30363d; border-radius: 12px;
     padding: 14px 16px;
@@ -144,6 +150,28 @@
       <text x="330" y="158" class="d-sub">stay inside the green zone</text>
     </svg>
   </div>
+  <div id="features">
+    <h2>What it detects</h2>
+    <ul>
+      <li><b>&#128564; Microsleep</b> — eyes closed for 3 s straight
+          &#8594; <span class="tag-alarm">alarm</span></li>
+      <li><b>&#128065;&#65039; Fatigue (PERCLOS)</b> — eyes closed more than
+          30% of the last 30 s &#8594; <span class="tag-warn">warning</span></li>
+      <li><b>&#129393; Yawning</b> — 2 or more yawns within a minute
+          &#8594; <span class="tag-warn">warning</span></li>
+      <li><b>&#128308; Head drop</b> — head pitched down ~20&#176; for 1.5 s
+          (nodding off) &#8594; <span class="tag-alarm">alarm</span></li>
+      <li><b>&#128064; Looking away</b> — turned more than 25&#176; sideways:
+          3 s &#8594; <span class="tag-warn">warning</span>, 6 s &#8594;
+          <span class="tag-alarm">alarm</span></li>
+      <li><b>&#128683; Face not visible</b> — head fully down, covered, or
+          seat empty: 2 s &#8594; <span class="tag-warn">warning</span>, 4 s
+          &#8594; <span class="tag-alarm">alarm</span></li>
+      <li><b>&#127919; Auto-calibration</b> — the first few seconds learn
+          <i>your</i> normal eye openness and posture, so thresholds adapt
+          to you and to the camera angle.</li>
+    </ul>
+  </div>
   <button id="start">Start camera</button>
   <div id="error" hidden></div>
   <div class="stage" hidden id="stage">
@@ -186,7 +214,8 @@ async function start() {
   video.srcObject = stream;
   await video.play();
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  $("start").hidden = $("checklist").hidden = $("demo").hidden = true;
+  $("start").hidden = $("checklist").hidden = true;
+  $("demo").hidden = $("features").hidden = true;
   $("stage").hidden = banner.hidden = $("metrics").hidden = false;
   loop();
   beepLoop();
